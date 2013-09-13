@@ -410,7 +410,7 @@ mxArray *mx_from_py_int(PyObject* obj)
     mxArray *r;
     int dims[1] = { 1 };
     r = mxCreateNumericArray(1, dims, mxINT32_CLASS, mxREAL);
-    *((long*)mxGetData(r)) = PyInt_AS_LONG(obj);
+    *((long*)mxGetData(r)) = PyLong_AS_LONG(obj);
     return r;
 }
 
@@ -422,7 +422,8 @@ mxArray *mx_from_py_bool(PyObject* obj)
     mxArray *r;
     int dims[1] = { 1 };
     r = mxCreateNumericArray(1, dims, mxLOGICAL_CLASS, mxREAL);
-    if (PyObject_Compare(obj, Py_True) == 0) {
+
+    if (PyObject_IsTrue(obj) == 1) {
         *((char*)mxGetData(r)) = 1;
     } else {
         *((char*)mxGetData(r)) = 0;
@@ -492,7 +493,7 @@ mxArray *mx_from_py_string(PyObject* obj)
     int len;
     mxChar* p;
 
-    PyString_AsStringAndSize(obj, &buf, &len);
+    PyBytes_AsStringAndSize(obj, &buf, &len);
     dims[0] = 1;
     dims[1] = len;
     r = mxCreateCharArray(2, dims);
@@ -514,7 +515,7 @@ void dump_repr(const char *msg, PyObject* obj)
     char *buf;
     mexWarnMsgTxt(msg);
     PyObject *repr = PyObject_Repr(obj);
-    buf = PyString_AsString(repr);
+    buf = PyBytes_AsString(repr);
     mexWarnMsgTxt(buf);
     Py_DECREF(repr);
 }
@@ -555,13 +556,13 @@ mxArray *mx_from_py_dict(PyObject* obj)
         o = PyTuple_GetItem(o, 0);
         if (o == NULL) goto error;
 
-        if (PyString_Check(o)) {
-            PyString_AsStringAndSize(o, &buf, &len);
+        if (PyBytes_Check(o)) {
+            PyBytes_AsStringAndSize(o, &buf, &len);
         } else {
             repr = PyObject_Repr(o);
             if (repr == NULL)
                 continue; /* ... FIXME */
-            buf = PyString_AsString(repr);
+            buf = PyBytes_AsString(repr);
             len = strlen(buf);
         }
 
@@ -614,7 +615,7 @@ mxArray *mx_from_py_unknown(PyObject* obj)
 
     PyObject *type = PyObject_Type(obj);
     PyObject *repr = PyObject_Repr(type);
-    buf = PyString_AsString(repr);
+    buf = PyBytes_AsString(repr);
     
     mexWarnMsgTxt("Unknown Python object seen / conversion failed:");
     mexWarnMsgTxt(buf);
@@ -791,7 +792,7 @@ mxArray *mx_from_py_none(PyObject* obj)
  */
 mxArray *mx_from_py(PyObject* obj)
 {
-    if (PyInt_Check(obj))
+    if (PyLong_Check(obj))
         return mx_from_py_int(obj);
     else if (PyFloat_Check(obj))
         return mx_from_py_float(obj);
@@ -799,7 +800,7 @@ mxArray *mx_from_py(PyObject* obj)
         return mx_from_py_bool(obj);
     else if (PyDict_Check(obj))
         return mx_from_py_dict(obj);
-    else if (PyString_Check(obj))
+    else if (PyBytes_Check(obj))
         return mx_from_py_string(obj);
 #if defined(NUMERIC) || defined(NUMARRAY) || defined(NUMPY)
     else if (PyArray_Check(obj))
@@ -809,7 +810,7 @@ mxArray *mx_from_py(PyObject* obj)
         return mx_from_py_complex(obj);
     else if (PySequence_Check(obj))
         return mx_from_py_sequence(obj);
-    else if (PyObject_Compare(obj, Py_None) == 0)
+    else if (PyObject_TypeCheck(obj, Py_None) == 0)
         return mx_from_py_none(obj);
     else
         return mx_from_py_unknown(obj);
@@ -1008,7 +1009,7 @@ PyObject *py_from_mx_char(const mxArray* arr)
     PyObject *obj;
 
     buf = string_from_mx(arr, &buflen, "");
-    obj = PyString_FromStringAndSize(buf, buflen-1); /* chop trailing \x00 */
+    obj = PyBytes_FromStringAndSize(buf, buflen-1); /* chop trailing \x00 */
     
     return obj;
 }
