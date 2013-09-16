@@ -126,18 +126,23 @@ int dlopen_python_hack()
 
 struct _interpreter {
     int initialized;
-    int array_imported;
-    int session_key;
 };
 typedef struct _interpreter interpreter_t;
 
-
-static interpreter_t interpreter = { 0, 0, 0 };
+static interpreter_t interpreter = { 0 };
 
 /**
  * Start up the Python interpreter if needed, importing all necessary stuff.
+ *
+ * Note: import_array is a macro defined in the NumPy C API. Unfortunately, for Python 3.x, this macro
+ *       returns 'NULL', whereas for Python 2.x, it returns void. Because of this, we need to change the 
+ *       return type of this function based on the version of Python.
  */
+#if PY_VERSION_HEX >= 0x03000000
+void * interpreter_initialize()
+#else
 void interpreter_initialize()
+#endif
 {
     if (!interpreter.initialized) {
         void *handle;
@@ -145,21 +150,25 @@ void interpreter_initialize()
 
         dlopen_python_hack(); /* necessary evil :( */
         Py_Initialize();
+        interpreter.initialized = 1;
 
-        if (!interpreter.array_imported) {
 #ifdef NUMERIC
-            import_array();
+        import_array();
 #endif
 #ifdef NUMARRAY
-            import_libnumarray();
-            import_libnumeric();
+        import_libnumarray();
+        import_libnumeric();
 #endif
 #ifdef NUMPY
-            import_array();
+        /* import_array is a macro that contains a return statement, so anything after this call won't run */
+        import_array();
 #endif
-        }
-        interpreter.initialized = 1;
     }
+#if PY_VERSION_HEX >= 0x03000000
+    return NULL;
+#else
+    return;
+#endif
 }
 
 /**
@@ -262,13 +271,23 @@ struct _stride
     /** Offsets of end positions for each dimension */
     long *end_offset;
     /** Strides for each dimension */
-    const int* strides;
+#if defined(NUMERIC) || defined(NUMARRAY) || defined(NUMPY)
+    const npy_intp *strides;
+#else
+    const int *strides;
+#endif
 };
 typedef struct _stride stride_t;
 
 /** Initialize stepping through a strided array */
+#if defined(NUMERIC) || defined(NUMARRAY) || defined(NUMPY)
+int stride_init(char* addr, int nd, const npy_intp* dims,
+                const npy_intp* strides, stride_t *s)
+#else
 int stride_init(char* addr, int nd, const int* dims,
                 const int* strides, stride_t *s)
+#endif
+
 {
     int i;
     s->nd = nd;
@@ -334,8 +353,13 @@ char* stride_pos(stride_t* s)
  *     Size of the elements in `to` (and `to2`). Must be the same as the
  *     size of elements in `from`!
  */
+#if defined(NUMERIC) || defined(NUMARRAY) || defined(NUMPY)
+void copy_to_contiguous(char *from, int nd, npy_intp *dims, npy_intp *strides,
+                        char *to, char* to2, int tstride)
+#else
 void copy_to_contiguous(char *from, int nd, int *dims, int *strides,
                         char *to, char* to2, int tstride)
+#endif
 {
     char *p, *p2, *r;
     stride_t s;
@@ -376,8 +400,13 @@ void copy_to_contiguous(char *from, int nd, int *dims, int *strides,
  *     Size of the elements in `to` (and `to2`). Must be the same as the
  *     size of elements in `from`!
  */
+#if defined(NUMERIC) || defined(NUMARRAY) || defined(NUMPY)
+void copy_from_contiguous(char *to, int nd, npy_intp *dims, npy_intp *strides,
+                          char *from, char* from2, int tstride)
+#else
 void copy_from_contiguous(char *to, int nd, int *dims, int *strides,
                           char *from, char* from2, int tstride)
+#endif
 {
     char *p, *p2, *r;
     stride_t s;
@@ -497,7 +526,7 @@ mxArray *mx_from_py_string(PyObject* obj)
     mxArray *r;
     int dims[2];
     char *buf;
-    int len;
+    Py_ssize_t len;
     mxChar* p;
 
     PyBytes_AsStringAndSize(obj, &buf, &len);
@@ -544,7 +573,7 @@ mxArray *mx_from_py_dict(PyObject* obj)
     int nitems;
     int k;
     char *buf;
-    int len;
+    Py_ssize_t len;
     char **fieldnames;
     PyObject *repr = NULL;
     
@@ -565,12 +594,17 @@ mxArray *mx_from_py_dict(PyObject* obj)
 
         if (PyBytes_Check(o)) {
             PyBytes_AsStringAndSize(o, &buf, &len);
-        } else {
+        } else if (PyByteArray_Check(o)) {
             repr = PyObject_Repr(o);
             if (repr == NULL)
                 continue; /* ... FIXME */
-            buf = PyBytes_AsString(repr);
+            buf = PyByteArray_AsString(repr);
             len = strlen(buf);
+        } else if (PyUnicode_Check(o)) {
+            buf = PyUnicode_AsUTF8AndSize(o, &len);
+        } else {
+            /* don't know what kind of object this is? */
+            goto error; 
         }
 
         fieldnames[k] = mxCalloc(len + 1, sizeof(char));
@@ -762,7 +796,14 @@ mxArray *mx_from_py_arrayobject(PyObject* obj_)
         }
         return r;
     } else {
-        r = mxCreateNumericArray(obj->nd, obj->dimensions, class, complexity);
+        int dims[obj->nd];
+        int *int_ptr = dims;
+        npy_intp *npy_ptr = obj->dimensions;
+        int i;
+        for (i = 0; i < obj->nd; ++i) {
+            *int_ptr++ = *npy_ptr++;
+        }
+        r = mxCreateNumericArray(obj->nd, dims, class, complexity);
     }
 
     stride = mxGetElementSize(r);
@@ -817,7 +858,7 @@ mxArray *mx_from_py(PyObject* obj)
         return mx_from_py_complex(obj);
     else if (PySequence_Check(obj))
         return mx_from_py_sequence(obj);
-    else if (PyObject_TypeCheck(obj, Py_None) == 0)
+    else if (obj == Py_None)
         return mx_from_py_none(obj);
     else
         return mx_from_py_unknown(obj);
@@ -1016,7 +1057,7 @@ PyObject *py_from_mx_char(const mxArray* arr)
     PyObject *obj;
 
     buf = string_from_mx(arr, &buflen, "");
-    obj = PyBytes_FromStringAndSize(buf, buflen-1); /* chop trailing \x00 */
+    obj = PyUnicode_FromStringAndSize(buf, buflen-1); /* chop trailing \x00 */
     
     return obj;
 }
@@ -1097,6 +1138,8 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
     mexAtExit(interpreter_finalize);
     interpreter_initialize();
+    wchar_t * fake_args = L"";
+    PySys_SetArgv(0, &fake_args);
 
     action = string_from_mx(prhs[0], &buflen, NULL);
 
