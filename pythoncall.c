@@ -67,7 +67,7 @@ static const char* __version__ = "0.3.1";
 #endif
 
 #ifndef LIBPYTHON
-#define LIBPYTHON "libpython2.3.so"
+#define LIBPYTHON "/home/benpeters/.pyenv/versions/3.3.2/lib/libpython3.3m.so"
 #endif
 
 #ifndef LP64
@@ -104,7 +104,14 @@ static int dlopen_hacked = 0;
 int dlopen_python_hack()
 {
     if (!dlopen_hacked) {
-        dlopen(LIBPYTHON, RTLD_NOW|RTLD_GLOBAL);
+        printf("Trying to load library %s...", LIBPYTHON);
+        void *handle = dlopen(LIBPYTHON, RTLD_NOW|RTLD_GLOBAL);
+        char * err = dlerror();
+        if (err != NULL) {
+            printf("\nProblem with DL Open hack: %s\n", err);
+        } else {
+            printf(" loaded!\n");
+        }
         dlopen_hacked = 1;
     }
 }
